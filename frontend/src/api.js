@@ -1,3 +1,13 @@
+/*
+CadrixAI
+Author: Bhavyadeep Rao
+Project: Capstone – Natural Language to Parametric 3D Modeling
+Year – 2026
+
+Designed and developed by Bhavyadeep Rao.
+All core architecture, planning logic, and CAD generation implemented independently.
+*/
+
 const API = "http://localhost:8000";
 
 async function handle(res) {

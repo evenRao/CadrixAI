@@ -1,3 +1,13 @@
+/*
+CadrixAI
+Author: Bhavyadeep Rao
+Project: Capstone – Natural Language to Parametric 3D Modeling
+Year – 2026
+
+Designed and developed by Bhavyadeep Rao.
+All core architecture, planning logic, and CAD generation implemented independently.
+*/
+
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
@@ -276,6 +286,10 @@ export default function App() {
         <div style={{ fontSize: 13, color: "#555", marginBottom: 10 }}>
           {caps?.tagline || "Text and voice to printable functional 3D parts"}
         </div>
+        <div style={{ marginTop: 20, fontSize: 12, color: "#888" }}>
+          CadrixAI © 2026 Bhavyadeep Rao
+        </div>
+
 
         <label style={{ display: "block", marginBottom: 8 }}>
           Prompt
