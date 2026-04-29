@@ -143,12 +143,37 @@ export default function App() {
     modelRef.current = null;
   }
 
+  function fitCameraToObject(object) {
+    const cam = cameraRef.current;
+    const controls = controlsRef.current;
+    if (!cam || !controls || !object) return;
+
+    object.updateWorldMatrix(true, true);
+
+    const box = new THREE.Box3().setFromObject(object);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const center = new THREE.Vector3();
+    box.getCenter(center);
+    const maxDim = Math.max(size.x, size.y, size.z) || 1;
+
+    cam.near = Math.max(0.001, maxDim / 100);
+    cam.far = Math.max(50, maxDim * 120);
+    cam.position.set(center.x + maxDim * 2.6, center.y + maxDim * 1.8, center.z + maxDim * 2.6);
+    cam.lookAt(center);
+    cam.updateProjectionMatrix();
+
+    controls.target.copy(center);
+    controls.update();
+  }
+
   function applyManualTransforms() {
-    const model = modelRef.current;
-    if (!model) return;
-    model.rotation.set(degToRad(rotDeg.x), degToRad(rotDeg.y), degToRad(rotDeg.z));
+    const preview = modelRef.current;
+    if (!preview) return;
+    preview.rotation.set(degToRad(rotDeg.x), degToRad(rotDeg.y), degToRad(rotDeg.z));
     const s = Number(scaleMul) || 1;
-    model.scale.setScalar(model.userData.__baseScale * s);
+    preview.scale.setScalar(preview.userData.__baseScale * s);
+    preview.updateWorldMatrix(true, true);
   }
 
   // Preview fix + add OrbitControls target
@@ -160,51 +185,36 @@ export default function App() {
         clearPreview();
 
         const model = gltf.scene;
-        modelRef.current = model;
-        groupRef.current.add(model);
+        model.rotation.x = -Math.PI / 2;
 
-        // bounds before transforms
+        const preview = new THREE.Group();
+        preview.add(model);
+        groupRef.current.add(preview);
+        modelRef.current = preview;
+
+        model.updateWorldMatrix(true, true);
         const box = new THREE.Box3().setFromObject(model);
         const size = new THREE.Vector3();
         box.getSize(size);
         const center = new THREE.Vector3();
         box.getCenter(center);
 
-        // center at origin
-        model.position.sub(center);
+        // Place the part so it sits on the grid with its footprint centered.
+        model.position.set(-center.x, -box.min.y, -center.z);
+        preview.updateWorldMatrix(true, true);
 
-        // base scale so model fits view nicely
-        const maxDim = Math.max(size.x, size.y, size.z);
+        const box2 = new THREE.Box3().setFromObject(preview);
+        const size2 = new THREE.Vector3();
+        box2.getSize(size2);
+        const maxDim = Math.max(size2.x, size2.y, size2.z);
         const target = 1.2;
         const baseScale = maxDim > 0 ? target / maxDim : 1;
 
-        model.userData.__baseScale = baseScale;
-        model.scale.setScalar(baseScale);
-
-        // recompute bounds after scaling
-        const box2 = new THREE.Box3().setFromObject(model);
-        const size2 = new THREE.Vector3();
-        box2.getSize(size2);
-        const maxDim2 = Math.max(size2.x, size2.y, size2.z);
-
-        // camera config to avoid clipping
-        const cam = cameraRef.current;
-        cam.near = Math.max(0.001, maxDim2 / 100);
-        cam.far = Math.max(50, maxDim2 * 120);
-
-        cam.position.set(maxDim2 * 2.6, maxDim2 * 1.8, maxDim2 * 2.6);
-        cam.lookAt(0, 0, 0);
-        cam.updateProjectionMatrix();
-
-        // controls target at origin
-        const controls = controlsRef.current;
-        if (controls) {
-          controls.target.set(0, 0, 0);
-          controls.update();
-        }
+        preview.userData.__baseScale = baseScale;
 
         // apply user transforms
         applyManualTransforms();
+        fitCameraToObject(preview);
       },
       undefined,
       (e) => {
@@ -217,10 +227,16 @@ export default function App() {
   useEffect(() => {
     // whenever rotation or scale changes, apply to current model
     applyManualTransforms();
+    if (modelRef.current) fitCameraToObject(modelRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rotDeg.x, rotDeg.y, rotDeg.z, scaleMul]);
 
   function resetView() {
+    if (modelRef.current) {
+      fitCameraToObject(modelRef.current);
+      return;
+    }
+
     const cam = cameraRef.current;
     const controls = controlsRef.current;
     if (!cam || !controls) return;
@@ -280,8 +296,32 @@ export default function App() {
   }
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "440px 1fr", height: "100vh" }}>
-      <div style={{ padding: 16, borderRight: "1px solid #ddd", overflowY: "auto" }}>
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "440px minmax(0, 1fr)",
+        width: "100vw",
+        height: "100vh",
+        overflow: "hidden",
+        overscrollBehavior: "none",
+        background: "#fff"
+      }}
+    >
+      <div
+        style={{
+          padding: 16,
+          borderRight: "1px solid #ddd",
+          overflowY: "auto",
+          overflowX: "hidden",
+          height: "100vh",
+          position: "sticky",
+          top: 0,
+          alignSelf: "start",
+          overscrollBehavior: "contain",
+          background: "#fff",
+          zIndex: 2
+        }}
+      >
         <h2 style={{ marginTop: 0 }}>{caps?.app_name || "FormForge"}</h2>
         <div style={{ fontSize: 13, color: "#555", marginBottom: 10 }}>
           {caps?.tagline || "Text and voice to printable functional 3D parts"}
@@ -425,9 +465,21 @@ export default function App() {
             <div><b>File ID:</b> {result.file_id}</div>
             <div style={{ marginTop: 10 }}>
               <a href={result.stl_download_url} target="_blank" rel="noreferrer">
-                Download STL
+                {result.extra_downloads?.length ? "Download Box STL" : "Download STL"}
               </a>
             </div>
+            {result.extra_downloads?.some((item) => item.label.includes("STEP")) && (
+              <div style={{ marginTop: 6, fontSize: 12, color: "#555" }}>
+                For Autodesk Fusion, use the STEP download to preserve units.
+              </div>
+            )}
+            {result.extra_downloads?.map((item, index) => (
+              <div key={`${item.url}-${index}`} style={{ marginTop: 6 }}>
+                <a href={item.url} target="_blank" rel="noreferrer">
+                  Download {item.label}
+                </a>
+              </div>
+            ))}
           </div>
         )}
 
@@ -455,7 +507,18 @@ export default function App() {
         )}
       </div>
 
-      <div ref={mountRef} style={{ width: "100%", height: "100%" }} />
+      <div
+        ref={mountRef}
+        style={{
+          width: "100%",
+          minWidth: 0,
+          height: "100vh",
+          minHeight: 0,
+          overflow: "hidden",
+          overscrollBehavior: "none",
+          touchAction: "none"
+        }}
+      />
     </div>
   );
 }
