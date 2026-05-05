@@ -28,6 +28,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field
+from cadrix_v2.app import router as cadrix_v2_router
 
 BASE_DIR = os.path.dirname(__file__)
 OUT_DIR = os.path.join(BASE_DIR, "out")
@@ -47,6 +48,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(cadrix_v2_router)
 
 # ----------------------------
 # Supported model types
