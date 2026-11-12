@@ -1,0 +1,180 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  merge_group:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  UV_LINK_MODE: copy
+
+jobs:
+  workflows:
+    name: Workflow validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate GitHub Actions syntax and expressions
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 -color
+
+  checks:
+    name: ${{ matrix.os }} / Node ${{ matrix.runtime.node }} / Python ${{ matrix.runtime.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        runtime:
+          - node: "26"
+            python: "3.14.10"
+          - node: "24"
+            python: "3.13"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.runtime.node }}
+          check-latest: true
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          python-version: ${{ matrix.runtime.python }}
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+          cache-suffix: python-${{ matrix.runtime.python }}
+      - name: Install locked dependencies
+        run: |
+          npm ci --prefix frontend --no-audit --no-fund
+          uv sync --directory backend --locked
+      - name: Check launcher and frontend API contracts
+        run: |
+          node --check scripts/dev.mjs
+          npm test
+      - name: Test all CAD models and release packaging
+        run: uv run --directory backend --locked python -m unittest discover -s tests -v
+      - name: Build the production frontend
+        run: npm run build --prefix frontend
+      - name: Exercise the production app, model generation, and downloads
+        run: uv run --directory backend --locked python ../scripts/smoke.py
+      - name: Package the tested source and frontend
+        if: matrix.os == 'ubuntu-latest' && matrix.runtime.node == '26'
+        run: uv run --directory backend --locked python ../scripts/package_release.py
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: matrix.os == 'ubuntu-latest' && matrix.runtime.node == '26'
+        with:
+          name: release-bundle
+          path: .release/*
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+
+  security:
+    name: Dependency security
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          python-version: "3.14.10"
+      - name: Prepare audit inputs
+        run: |
+          mkdir -p .reports
+          npm ci --prefix frontend --no-audit --no-fund
+          uv export --directory backend --locked --no-dev --no-hashes --no-emit-project --output-file ../.reports/requirements.txt
+      - name: Audit frontend dependencies
+        id: npm-audit
+        continue-on-error: true
+        run: npm audit --prefix frontend --audit-level high --json > .reports/npm-audit.json
+      - name: Audit backend dependencies
+        id: python-audit
+        continue-on-error: true
+        run: uvx --python 3.14.10 --from pip-audit==2.10.1 pip-audit --requirement .reports/requirements.txt --no-deps --disable-pip --progress-spinner off --format json --output .reports/python-audit.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: security-reports
+          path: .reports/*.json
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Enforce both audit results
+        if: always()
+        env:
+          NPM_AUDIT: ${{ steps.npm-audit.outcome }}
+          PYTHON_AUDIT: ${{ steps.python-audit.outcome }}
+        run: |
+          if [ "$NPM_AUDIT" != success ] || [ "$PYTHON_AUDIT" != success ]; then
+            echo "Dependency audit failed. Review the security-reports artifact."
+            exit 1
+          fi
+
+  containers:
+    name: Container / ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Build the release container on its native architecture
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          load: true
+          tags: cadrixai:ci
+          platforms: linux/${{ matrix.arch }}
+          provenance: false
+          cache-from: type=gha,scope=container-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=container-${{ matrix.arch }}
+      - name: Test non-root container, health, frontend, CAD exports, and read-only filesystem
+        run: python scripts/container_smoke.py --image cadrixai:ci
+
+  required:
+    name: Required checks
+    if: always()
+    needs: [workflows, checks, security, containers]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every gate to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python -c 'import json, os, sys; jobs=json.loads(os.environ["RESULTS"]); failed=[name for name, job in jobs.items() if job["result"] != "success"]; print("Failed or skipped gates:", failed); sys.exit(bool(failed))'

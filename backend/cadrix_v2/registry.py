@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
@@ -154,6 +155,7 @@ MODEL_SPECS = [
             bool_param("cable_slot", "Cable Slot", "Cuts a slot for a charging cable.", default=False),
             num_param("cable_slot_width_mm", "Cable Slot Width", "Width of the cable slot.", default=14, minimum=6, maximum=28),
             bool_param("rounded_edges", "Rounded Edges", "Adds safe fillets where possible.", default=True),
+            bool_param("lightweight", "Lightweight Frame", "Opens the wedge while retaining the sloped support, rear wall, and base.", default=True),
             num_param("edge_radius_mm", "Edge Radius", "Fillet radius for rounded edges.", default=2, minimum=0.5, maximum=5),
             num_param("wall_thickness_mm", "Wall Thickness", "Support thickness for FDM printing.", default=3, minimum=1.2, maximum=8),
             num_param("tolerance_mm", "Tolerance", "Clearance allowance for fit-sensitive features.", default=0.4, minimum=0.2, maximum=1.0),
@@ -169,6 +171,7 @@ MODEL_SPECS = [
             "cable_slot": False,
             "cable_slot_width_mm": 14,
             "rounded_edges": True,
+            "lightweight": True,
             "edge_radius_mm": 2,
             "wall_thickness_mm": 3,
             "tolerance_mm": 0.4,
@@ -187,7 +190,7 @@ MODEL_SPECS = [
         keywords=("box with lid", "lid box", "container with lid", "storage box"),
         examples=(
             "Box with lid 120x80x60 mm with 0.4mm clearance.",
-            "Large snap fit box for electronics.",
+            "Large box with lid for electronics.",
         ),
         required_parameters=(
             num_param("length_mm", "Length", "Outer box length.", required=True, default=120, minimum=30, maximum=300),
@@ -242,7 +245,7 @@ MODEL_SPECS = [
             num_param("opening_gap_mm", "Opening Gap", "Gap that lets the cable snap in.", default=1.5, minimum=0.6, maximum=6),
             bool_param("mounting_base", "Mounting Base", "Adds a flat base for mounting.", default=False),
             bool_param("screw_hole", "Screw Hole", "Cuts a screw hole through the mounting base.", default=False),
-            num_param("base_length_mm", "Base Length", "Length of the optional mounting base.", default=24, minimum=12, maximum=60),
+            num_param("base_length_mm", "Base Length", "Length of the optional mounting base.", default=32, minimum=12, maximum=80),
             num_param("base_thickness_mm", "Base Thickness", "Thickness of the optional mounting base.", default=3, minimum=1.2, maximum=8),
             num_param("screw_hole_diameter_mm", "Screw Hole Diameter", "Mounting screw hole diameter.", default=4.2, minimum=2.5, maximum=8),
             num_param("tolerance_mm", "Tolerance", "Shared print tolerance hint.", default=0.35, minimum=0.2, maximum=1.0),
@@ -254,7 +257,7 @@ MODEL_SPECS = [
             "opening_gap_mm": 1.5,
             "mounting_base": False,
             "screw_hole": False,
-            "base_length_mm": 24,
+            "base_length_mm": 32,
             "base_thickness_mm": 3,
             "screw_hole_diameter_mm": 4.2,
             "tolerance_mm": 0.35,
@@ -306,7 +309,7 @@ MODEL_SPECS = [
         title="PCB Enclosure",
         category="Engineering/lab",
         description="A board-fit enclosure with standoffs, screw holes, ventilation slots, and a removable lid.",
-        keywords=("pcb enclosure", "electronics box", "sensor enclosure", "board enclosure", "pcb case"),
+        keywords=("pcb enclosure", "electronics box", "electronics enclosure", "sensor enclosure", "board enclosure", "pcb case"),
         examples=(
             "PCB enclosure for an 80x50 mm board with ventilation slots.",
             "Large electronics enclosure with screw holes and removable lid.",
@@ -370,8 +373,8 @@ MODEL_SPECS = [
         ),
         optional_parameters=(
             num_param("plate_thickness_mm", "Plate Thickness", "Thickness of the mounting plate.", default=6, minimum=3, maximum=12),
-            num_param("hook_diameter_mm", "Hook Diameter", "Diameter of the rounded hook arm.", default=10, minimum=4, maximum=20),
-            num_param("hook_drop_mm", "Hook Drop", "Vertical drop near the tip of the hook.", default=24, minimum=8, maximum=80),
+            num_param("hook_diameter_mm", "Hook Thickness", "Thickness of the rounded, reinforced hook arm.", default=10, minimum=4, maximum=20),
+            num_param("hook_drop_mm", "Tip Rise", "Height of the retaining tip above the hook arm.", default=24, minimum=8, maximum=80),
             num_param("screw_hole_diameter_mm", "Screw Hole Diameter", "Diameter of the mounting holes.", default=5, minimum=3, maximum=8),
             num_param("screw_hole_spacing_mm", "Screw Hole Spacing", "Center-to-center spacing of the plate holes.", default=40, minimum=18, maximum=100),
         ),
@@ -488,7 +491,8 @@ MODEL_SPECS = [
         optional_parameters=(
             num_param("wall_thickness_mm", "Wall Thickness", "Outer wall thickness.", default=3, minimum=1.2, maximum=8),
             num_param("floor_thickness_mm", "Floor Thickness", "Base floor thickness.", default=3, minimum=1.2, maximum=10),
-            int_param("compartment_count", "Compartment Count", "Number of vertical compartments.", default=3, minimum=2, maximum=6),
+            int_param("compartment_count", "Compartment Count", "Number of equally sized compartments.", default=3, minimum=1, maximum=6),
+            num_param("corner_radius_mm", "Corner Radius", "Radius of the outer footprint corners.", default=5, minimum=0, maximum=15),
             num_param("divider_thickness_mm", "Divider Thickness", "Thickness of internal dividers.", default=3, minimum=1.2, maximum=8),
         ),
         defaults={
@@ -498,6 +502,7 @@ MODEL_SPECS = [
             "wall_thickness_mm": 3,
             "floor_thickness_mm": 3,
             "compartment_count": 3,
+            "corner_radius_mm": 5,
             "divider_thickness_mm": 3,
         },
         size_presets={
@@ -662,7 +667,7 @@ MODEL_SPECS = [
         title="Snap-Fit Box",
         category="Mechanical",
         description="A printable enclosure base and lid that uses cantilever snap tabs with matching lid pockets.",
-        keywords=("snap fit box", "snap-fit box"),
+        keywords=("snap fit box", "snap-fit box", "snap-fit electronics box", "snap fit electronics box"),
         examples=(
             "Snap-fit box 90x60x35 mm with 0.4mm clearance and 16mm snap tabs.",
             "Small snap-fit electronics box with rounded edges.",
@@ -1019,6 +1024,183 @@ MODEL_SPECS = [
 ]
 
 
+def _library_spec(model_type, title, category, description, keywords, examples, required, optional, presets) -> ModelSpec:
+    """Use parameter definitions as the single source of defaults for new models."""
+    return ModelSpec(
+        model_type=model_type, title=title, category=category, description=description,
+        keywords=tuple(keywords), examples=tuple(examples), required_parameters=tuple(required),
+        optional_parameters=tuple(optional), defaults={item.key: item.default for item in (*required, *optional)},
+        size_presets=presets,
+    )
+
+
+MODEL_SPECS.extend([
+    _library_spec(
+        "parts_tray", "Parts Tray", "Functional household",
+        "A low-profile tray with rounded corners, softened rim, and equally sized optional compartments.",
+        ("parts tray", "sorting tray", "catchall tray", "organizer tray"),
+        ("Parts tray 160x100x20 mm with 3 compartments.", "Small sorting tray with one compartment."),
+        (
+            num_param("length_mm", "Length", "Overall tray length.", required=True, default=160, minimum=40, maximum=300),
+            num_param("width_mm", "Width", "Overall tray width.", required=True, default=100, minimum=30, maximum=220),
+            num_param("height_mm", "Height", "Overall tray height including the floor.", required=True, default=20, minimum=8, maximum=70),
+        ), (
+            num_param("wall_thickness_mm", "Wall Thickness", "Thickness around the tray.", default=2.4, minimum=1.2, maximum=6),
+            num_param("floor_thickness_mm", "Floor Thickness", "Solid base thickness.", default=2.4, minimum=1.2, maximum=8),
+            num_param("corner_radius_mm", "Corner Radius", "Outer corner radius; interior follows the wall offset.", default=6, minimum=0, maximum=20),
+            int_param("compartment_count", "Compartment Count", "Equal-width compartments.", default=1, minimum=1, maximum=8),
+            num_param("divider_thickness_mm", "Divider Thickness", "Thickness of the compartment walls.", default=2.4, minimum=1.2, maximum=6),
+        ), {"small": {"length_mm": 120, "width_mm": 80, "height_mm": 18}, "large": {"length_mm": 220, "width_mm": 140, "height_mm": 28}},
+    ),
+    _library_spec(
+        "planter", "Planter & Drip Tray", "Functional household",
+        "A tapered planter with a reinforced rim, optional drainage, and a separately printable drip tray.",
+        ("planter", "plant pot", "flower pot"),
+        ("Planter 90x80 mm with drainage holes and drip tray.", "Small plant pot without drainage holes."),
+        (
+            num_param("diameter_mm", "Diameter", "Diameter at the planter mouth, excluding the 1mm rim bead.", required=True, default=90, minimum=40, maximum=200),
+            num_param("height_mm", "Height", "Overall planter height.", required=True, default=80, minimum=30, maximum=220),
+        ), (
+            num_param("wall_thickness_mm", "Wall Thickness", "Radial wall thickness.", default=2.4, minimum=1.2, maximum=6),
+            num_param("floor_thickness_mm", "Floor Thickness", "Thickness below the soil cavity.", default=3, minimum=1.6, maximum=8),
+            num_param("taper_mm", "Taper", "Reduction in radius from the mouth to the bottom.", default=8, minimum=0, maximum=30),
+            bool_param("drainage_holes", "Drainage Holes", "Five drainage holes through the floor.", default=True),
+            num_param("drain_hole_diameter_mm", "Drain Hole Diameter", "Diameter of each drain hole.", default=4.2, minimum=2, maximum=8),
+            bool_param("drip_tray", "Drip Tray", "Includes a separate matching drainage tray.", default=True),
+            num_param("tray_clearance_mm", "Tray Clearance", "Radial clearance around the planter base.", default=3, minimum=1, maximum=10),
+        ), {"small": {"diameter_mm": 65, "height_mm": 60}, "large": {"diameter_mm": 140, "height_mm": 120}},
+    ),
+    _library_spec(
+        "funnel", "Funnel", "Engineering/lab",
+        "A hollow tapered funnel with a continuous open throat, straight outlet, and softened mouth.",
+        ("funnel", "pouring funnel"),
+        ("Funnel 80x16x65 mm with 18mm neck length.", "Small funnel with 12mm outlet diameter."),
+        (
+            num_param("mouth_diameter_mm", "Mouth Diameter", "Outside diameter of the large opening.", required=True, default=80, minimum=25, maximum=180),
+            num_param("outlet_diameter_mm", "Outlet Diameter", "Outside diameter of the outlet tube.", required=True, default=16, minimum=6, maximum=60),
+            num_param("height_mm", "Height", "Overall height including the outlet neck.", required=True, default=65, minimum=25, maximum=180),
+        ), (
+            num_param("neck_length_mm", "Neck Length", "Straight outlet length.", default=18, minimum=6, maximum=60),
+            num_param("wall_thickness_mm", "Wall Thickness", "Radial wall thickness around the flow path.", default=1.8, minimum=1.2, maximum=5),
+        ), {"small": {"mouth_diameter_mm": 50, "outlet_diameter_mm": 12, "height_mm": 50}, "large": {"mouth_diameter_mm": 120, "outlet_diameter_mm": 24, "height_mm": 100}},
+    ),
+    _library_spec(
+        "angle_bracket", "Angle Bracket", "Mechanical",
+        "A right-angle mounting bracket with optional side gussets and holes through both legs.",
+        ("angle bracket", "mounting bracket", "l bracket", "l-bracket", "corner bracket"),
+        ("Angle bracket 40x40x30 mm with mounting holes and gussets.", "Small L-bracket without gussets."),
+        (
+            num_param("leg_length_mm", "Leg Length", "Horizontal leg length.", required=True, default=40, minimum=20, maximum=120),
+            num_param("leg_height_mm", "Leg Height", "Vertical leg height.", required=True, default=40, minimum=20, maximum=120),
+            num_param("width_mm", "Width", "Width shared by both legs.", required=True, default=30, minimum=18, maximum=100),
+        ), (
+            num_param("wall_thickness_mm", "Wall Thickness", "Thickness of both mounting legs.", default=4, minimum=2.4, maximum=10),
+            bool_param("mounting_holes", "Mounting Holes", "One clearance hole in each leg.", default=True),
+            num_param("screw_hole_diameter_mm", "Screw Hole Diameter", "Diameter of both mounting holes.", default=4.2, minimum=2.5, maximum=10),
+            bool_param("gussets", "Gussets", "Triangular braces along both sides.", default=True),
+        ), {"small": {"leg_length_mm": 28, "leg_height_mm": 28, "width_mm": 24}, "large": {"leg_length_mm": 70, "leg_height_mm": 70, "width_mm": 45}},
+    ),
+    _library_spec(
+        "drawer_pull", "Drawer Pull", "Custom-fit",
+        "A rounded bridge handle with two mounting posts and blind screw-clearance bores.",
+        ("drawer pull", "drawer handle", "cabinet handle", "cabinet pull"),
+        ("Drawer pull with 96mm hole spacing, 28mm height, and 14mm grip width.", "Drawer handle with 128mm hole spacing."),
+        (
+            num_param("hole_spacing_mm", "Hole Spacing", "Center-to-center distance between mounting bores.", required=True, default=96, minimum=40, maximum=200),
+            num_param("height_mm", "Height", "Overall handle height above the drawer face.", required=True, default=28, minimum=16, maximum=50),
+            num_param("grip_width_mm", "Grip Width", "Width of the rounded gripping bar.", required=True, default=14, minimum=10, maximum=30),
+        ), (
+            num_param("grip_thickness_mm", "Grip Thickness", "Vertical thickness of the gripping bar.", default=8, minimum=5, maximum=15),
+            num_param("post_diameter_mm", "Post Diameter", "Outside diameter of each mounting post.", default=14, minimum=8, maximum=26),
+            num_param("screw_hole_diameter_mm", "Screw Hole Diameter", "Untapped clearance bore for your fastening method.", default=4.2, minimum=2.5, maximum=8),
+            num_param("hole_depth_mm", "Hole Depth", "Blind bore depth from the mounting face.", default=12, minimum=4, maximum=25),
+        ), {"small": {"hole_spacing_mm": 64, "height_mm": 24}, "large": {"hole_spacing_mm": 160, "height_mm": 32}},
+    ),
+    _library_spec(
+        "desk_grommet", "Desk Grommet", "Custom-fit",
+        "A flanged cable pass-through sleeve with configurable desk fit and an optional open cable notch.",
+        ("desk grommet", "cable grommet", "cable pass through", "cable pass-through"),
+        ("Desk grommet with 60mm desk hole diameter and 20mm sleeve depth.", "Small cable grommet without cable notch."),
+        (
+            num_param("desk_hole_diameter_mm", "Desk Hole Diameter", "Diameter of the existing desktop hole.", required=True, default=60, minimum=25, maximum=120),
+            num_param("sleeve_depth_mm", "Sleeve Depth", "Insertion length below the flange.", required=True, default=20, minimum=8, maximum=60),
+        ), (
+            num_param("wall_thickness_mm", "Wall Thickness", "Radial sleeve wall thickness.", default=2.4, minimum=1.2, maximum=6),
+            num_param("flange_diameter_mm", "Flange Diameter", "Diameter of the lip that rests on the desktop.", default=74, minimum=35, maximum=150),
+            num_param("flange_thickness_mm", "Flange Thickness", "Thickness of the support lip.", default=3, minimum=1.6, maximum=8),
+            num_param("fit_clearance_mm", "Fit Clearance", "Radial clearance between sleeve and desk hole.", default=0.3, minimum=0.1, maximum=1),
+            bool_param("cable_notch", "Cable Notch", "Opens one side so existing cables can enter without threading.", default=True),
+            num_param("notch_width_mm", "Notch Width", "Width of the open-side cable slot.", default=12, minimum=5, maximum=40),
+        ), {"small": {"desk_hole_diameter_mm": 40, "flange_diameter_mm": 54}, "large": {"desk_hole_diameter_mm": 80, "flange_diameter_mm": 94}},
+    ),
+    _library_spec(
+        "hose_adapter", "Hose Adapter", "Engineering/lab",
+        "A hollow transition between two hose sizes, with straight insertion ends and optional retention ridges. Intended for unpressurized hobby airflow.",
+        ("hose adapter", "hose adaptor", "hose reducer", "tube adapter"),
+        ("Hose adapter 32x25x50 mm with retention ridges.", "Hose reducer with 40mm inlet diameter and 32mm outlet diameter."),
+        (
+            num_param("inlet_diameter_mm", "Inlet Diameter", "Outside diameter of the larger insertion end.", required=True, default=32, minimum=12, maximum=100),
+            num_param("outlet_diameter_mm", "Outlet Diameter", "Outside diameter of the other insertion end.", required=True, default=25, minimum=8, maximum=100),
+            num_param("length_mm", "Length", "Overall adapter length.", required=True, default=50, minimum=25, maximum=160),
+        ), (
+            num_param("wall_thickness_mm", "Wall Thickness", "Radial thickness around the open bore.", default=2.4, minimum=1.2, maximum=6),
+            num_param("end_length_mm", "End Length", "Length of each straight insertion section.", default=12, minimum=6, maximum=45),
+            bool_param("retention_ridges", "Retention Ridges", "Adds a shallow retaining ring on each insertion end.", default=True),
+            num_param("ridge_height_mm", "Ridge Height", "Radial projection of each retaining ring.", default=0.8, minimum=0.3, maximum=2),
+        ), {"small": {"inlet_diameter_mm": 25, "outlet_diameter_mm": 18, "length_mm": 40}, "large": {"inlet_diameter_mm": 60, "outlet_diameter_mm": 40, "length_mm": 80}},
+    ),
+    _library_spec(
+        "cable_comb", "Cable Comb", "Functional household",
+        "A row of rounded cable pockets with retaining openings, spacing control, and optional mounting ears.",
+        ("cable comb", "wire comb", "cable separator"),
+        ("Cable comb with 6mm cable diameter, 5 cables, and mounting holes.", "Wire comb with 4mm cable diameter and 8 cables."),
+        (
+            num_param("cable_diameter_mm", "Cable Diameter", "Diameter of each cable.", required=True, default=6, minimum=2, maximum=16),
+            int_param("cable_count", "Cable Count", "Number of cable pockets.", required=True, default=5, minimum=2, maximum=12),
+        ), (
+            num_param("cable_spacing_mm", "Cable Spacing", "Center-to-center spacing between pockets.", default=12, minimum=6, maximum=30),
+            num_param("depth_mm", "Depth", "Length along the cables.", default=12, minimum=8, maximum=40),
+            num_param("wall_thickness_mm", "Wall Thickness", "Material between and around the pockets.", default=2, minimum=1.2, maximum=4),
+            num_param("floor_thickness_mm", "Floor Thickness", "Continuous base under the cable pockets.", default=2.4, minimum=1.2, maximum=6),
+            num_param("fit_clearance_mm", "Fit Clearance", "Radial clearance around each cable.", default=0.25, minimum=0.1, maximum=0.8),
+            bool_param("mounting_holes", "Mounting Holes", "Adds a mounting ear and hole at each end.", default=False),
+            num_param("screw_hole_diameter_mm", "Screw Hole Diameter", "Mounting ear clearance holes.", default=4.2, minimum=2.5, maximum=6),
+        ), {"small": {"cable_diameter_mm": 4, "cable_count": 4}, "large": {"cable_diameter_mm": 8, "cable_count": 8, "cable_spacing_mm": 16}},
+    ),
+    _library_spec(
+        "battery_organizer", "Battery Organizer", "Functional household",
+        "A rounded storage block with individual blind cell pockets and chamfered entries. Set the measured cell diameter for your batteries.",
+        ("battery organizer", "battery holder", "battery rack", "cell organizer"),
+        ("Battery organizer with 15mm cell diameter, 8 cells, and 2 rows.", "Small battery rack with 4 cells and 2 rows."),
+        (
+            num_param("cell_diameter_mm", "Cell Diameter", "Measured outside battery diameter.", required=True, default=15, minimum=8, maximum=35),
+            int_param("cell_count", "Cell Count", "Total number of separate pockets.", required=True, default=8, minimum=1, maximum=24),
+            int_param("row_count", "Row Count", "Number of pocket rows.", required=True, default=2, minimum=1, maximum=6),
+        ), (
+            num_param("pocket_depth_mm", "Pocket Depth", "Blind pocket depth above the floor.", default=24, minimum=8, maximum=55),
+            num_param("wall_thickness_mm", "Wall Thickness", "Material between neighboring pockets.", default=2.4, minimum=1.2, maximum=6),
+            num_param("floor_thickness_mm", "Floor Thickness", "Solid material below the cells.", default=3, minimum=1.6, maximum=8),
+            num_param("fit_clearance_mm", "Fit Clearance", "Radial clearance around each cell.", default=0.3, minimum=0.1, maximum=1),
+        ), {"small": {"cell_count": 4, "row_count": 2}, "large": {"cell_count": 16, "row_count": 4}},
+    ),
+    _library_spec(
+        "tube_end_cap", "Tube End Cap", "Custom-fit",
+        "A closed round cap with configurable tube clearance, a softened rim, and optional external grip rings.",
+        ("tube end cap", "tube cap", "pipe cap", "round end cap"),
+        ("Tube end cap with 25mm tube diameter and 20mm height.", "Small tube cap without grip ribs."),
+        (
+            num_param("tube_diameter_mm", "Tube Diameter", "Outside diameter of the tube being covered.", required=True, default=25, minimum=8, maximum=100),
+            num_param("height_mm", "Height", "Overall cap height including the closed end.", required=True, default=20, minimum=8, maximum=80),
+        ), (
+            num_param("wall_thickness_mm", "Wall Thickness", "Radial wall around the tube.", default=2.4, minimum=1.2, maximum=6),
+            num_param("floor_thickness_mm", "Floor Thickness", "Closed-end thickness.", default=3, minimum=1.6, maximum=8),
+            num_param("fit_clearance_mm", "Fit Clearance", "Radial slip-fit clearance around the tube.", default=0.25, minimum=0.1, maximum=1),
+            bool_param("grip_ribs", "Grip Ribs", "Adds three shallow external grip rings.", default=True),
+        ), {"small": {"tube_diameter_mm": 16, "height_mm": 16}, "large": {"tube_diameter_mm": 50, "height_mm": 30}},
+    ),
+])
+
+HIGHLIGHTED_BUILDS.extend(spec.title for spec in MODEL_SPECS if spec.model_type in {"parts_tray", "planter", "funnel", "angle_bracket", "drawer_pull", "desk_grommet", "hose_adapter", "cable_comb", "battery_organizer", "tube_end_cap"})
 MODEL_REGISTRY: Dict[str, ModelSpec] = {spec.model_type: spec for spec in MODEL_SPECS}
 
 
@@ -1043,7 +1225,7 @@ def detect_model_type(prompt: str, requested_model_type: Optional[str] = None) -
     for spec in MODEL_SPECS:
         score = 0
         for keyword in spec.keywords:
-            if keyword in prompt_lower:
+            if re.search(rf"(?<!\w){re.escape(keyword)}(?!\w)", prompt_lower):
                 score += max(1, len(keyword.split()))
         if spec.model_type.replace("_", " ") in prompt_lower:
             score += 2

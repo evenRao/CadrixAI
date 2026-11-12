@@ -46,9 +46,17 @@ class RuleBasedParser(DesignParser):
         if wall is not None:
             print_settings["wall_thickness_mm"] = wall
 
-        tolerance = extract_labeled_length_mm(prompt, ["tolerance", "clearance"])
+        tolerance = extract_labeled_length_mm(prompt, ["tolerance"])
         if tolerance is not None:
             print_settings["tolerance_mm"] = tolerance
+        clearance = extract_labeled_length_mm(prompt, ["clearance"])
+        if clearance is not None:
+            fit_keys = ("lid_clearance_mm", "board_clearance_mm", "fit_clearance_mm", "clearance_mm", "stack_clearance_mm", "slot_clearance_mm", "tray_clearance_mm", "tolerance_mm")
+            fit_key = next((key for key in fit_keys if key in spec.defaults), None)
+            if fit_key == "tolerance_mm":
+                print_settings[fit_key] = clearance
+            elif fit_key:
+                dimensions[fit_key] = clearance
 
         rounded_edges = coerce_bool_feature(
             prompt,
@@ -119,6 +127,13 @@ class RuleBasedParser(DesignParser):
         cable_feature = coerce_bool_feature(prompt, ["cable hole", "cable slot", "charger slot", "cable management"])
         if cable_feature is not None:
             features["cable_hole"] = cable_feature
+        lightweight = coerce_bool_feature(prompt, ["lightweight", "lightweight frame"], ["solid wedge", "no lightweight frame"])
+        if lightweight is not None:
+            features["lightweight"] = lightweight
+        for key, labels in (("back_support_height_mm", ["back height", "support height"]), ("side_margin_mm", ["side margin"])):
+            value = extract_labeled_length_mm(prompt, labels)
+            if value is not None:
+                dimensions[key] = value
 
         if "phone_width_mm" not in dimensions:
             assumptions.append("Used the default phone width because no explicit device width was found.")
@@ -177,7 +192,7 @@ class RuleBasedParser(DesignParser):
             dimensions.setdefault("clip_width_mm", pair[1])
             assumptions.append("Interpreted the first two cable clip dimensions as cable diameter and clip width.")
 
-        cable_d = extract_labeled_length_mm(prompt, ["cable diameter", "wire diameter", "cord diameter"])
+        cable_d = extract_labeled_length_mm(prompt, ["cable diameter", "wire diameter", "cord diameter", "cable", "wire", "cord"])
         if cable_d is not None:
             dimensions["cable_diameter_mm"] = cable_d
 
@@ -459,21 +474,18 @@ class RuleBasedParser(DesignParser):
         triple = extract_dimension_triple_mm(prompt)
         if triple and len(mm_defs) >= 3:
             for definition, value in zip(mm_defs[:3], triple):
-                dimensions.setdefault(definition.key, value)
+                dimensions[definition.key] = value
             explicit_matches += min(3, len(mm_defs))
             assumptions.append(f"Interpreted the dimension triple using the primary dimensions for {spec.title}.")
 
         pair = extract_dimension_pair_mm(prompt)
-        if pair and len(mm_defs) >= 2:
+        if pair and not triple and len(mm_defs) >= 2:
             for definition, value in zip(mm_defs[:2], pair):
-                dimensions.setdefault(definition.key, value)
+                dimensions[definition.key] = value
             explicit_matches += min(2, len(mm_defs))
             assumptions.append(f"Used the first two provided dimensions for {spec.title}.")
 
         for definition in spec.parameter_definitions:
-            if definition.key in dimensions or definition.key in features or definition.key in print_settings:
-                continue
-
             labels = self._definition_labels(definition)
             value = None
             if definition.type == "boolean":
@@ -521,4 +533,7 @@ class RuleBasedParser(DesignParser):
             labels.append(cleaned_key.replace(" width", " wide"))
         if cleaned_key.endswith(" height"):
             labels.append(cleaned_key.replace(" height", " tall"))
+        if cleaned_key.endswith(" count"):
+            noun = cleaned_key.removesuffix(" count")
+            labels.extend([noun + "s", noun])
         return list(dict.fromkeys(label for label in labels if label))

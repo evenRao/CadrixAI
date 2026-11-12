@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import math
 import uuid
 from typing import Any, Dict
 
@@ -45,10 +47,16 @@ def _merge_parameters(model_type: str, defaults: Dict[str, Any], parser_output: 
 
     if "cable_hole" in parameters:
         parameters["cable_slot"] = bool(parameters["cable_hole"])
-    if model_type in {"box_with_lid", "snap_fit_box"} and "lid_clearance_mm" not in parameters and "tolerance_mm" in parameters:
-        parameters["lid_clearance_mm"] = parameters["tolerance_mm"]
-    if model_type == "pcb_enclosure" and "tolerance_mm" in parameters and "board_clearance_mm" not in parameters:
-        parameters["board_clearance_mm"] = max(float(parameters["tolerance_mm"]) * 2.0, 1.0)
+    if "tolerance_mm" in intent.print_settings:
+        # Defaults already exist in parameters; use explicit intent to decide
+        # whether a general clearance request should replace a fit default.
+        clearance = intent.print_settings["tolerance_mm"]
+        if model_type in {"box_with_lid", "snap_fit_box"} and "lid_clearance_mm" not in intent.dimensions:
+            parameters["lid_clearance_mm"] = clearance
+        if model_type == "pcb_enclosure" and "board_clearance_mm" not in intent.dimensions:
+            parameters["board_clearance_mm"] = clearance
+        if "fit_clearance_mm" in defaults and "fit_clearance_mm" not in intent.dimensions:
+            parameters["fit_clearance_mm"] = clearance
 
     return parameters
 
@@ -68,11 +76,13 @@ def _coerce_overrides(model_type: str, overrides: Dict[str, Any]) -> Dict[str, A
         try:
             if definition.type == "boolean":
                 if isinstance(value, str):
-                    coerced[key] = value.lower() in {"1", "true", "yes", "on"}
+                    lowered = value.lower()
+                    coerced[key] = lowered in {"1", "true", "yes", "on"} if lowered in {"1", "true", "yes", "on", "0", "false", "no", "off"} else value
                 else:
                     coerced[key] = bool(value)
             elif definition.type == "integer":
-                coerced[key] = int(float(value))
+                number = float(value)
+                coerced[key] = int(number) if math.isfinite(number) and number.is_integer() else value
             elif definition.type == "number":
                 coerced[key] = float(value)
             else:
@@ -140,7 +150,9 @@ def generate_design(
     parameters = {**plan.parameters, **_coerce_overrides(plan.model_type, parameter_overrides or {})}
     validation = validate_parameters(spec, parameters)
     warnings = list(dict.fromkeys([*plan.warnings, *(issue.message for issue in validation.warnings)]))
-    errors = list(dict.fromkeys([*plan.errors, *(issue.message for issue in validation.errors)]))
+    # Revalidate the final overrides: errors in the original plan may have been
+    # corrected in Adjust and must not permanently block that design.
+    errors = list(dict.fromkeys(issue.message for issue in validation.errors))
 
     if not spec.implemented:
         errors.append(f"{spec.title} is registered in V2 but not implemented yet.")
@@ -159,8 +171,18 @@ def generate_design(
             metadata=GenerationMetadata(printability_score=validation.printability_score),
         )
 
-    geometry = generate_geometry(spec.model_type, validation.parameters)
-    files = export_generated_geometry(geometry, f"v2_{uuid.uuid4().hex[:12]}", request)
+    try:
+        geometry = generate_geometry(spec.model_type, validation.parameters)
+        files = export_generated_geometry(geometry, f"v2_{uuid.uuid4().hex[:12]}", request)
+    except Exception:
+        logging.getLogger(__name__).exception("Generation failed for %s", spec.model_type)
+        return GenerateResponseV2(
+            success=False, model_type=spec.model_type, title=spec.title, implemented=True,
+            parameters=validation.parameters, intent=plan.intent, assumptions=plan.assumptions,
+            warnings=warnings,
+            errors=["This combination could not be built or exported as a valid solid. Try simpler dimensions, thicker walls, or the template defaults."],
+            metadata=GenerationMetadata(printability_score=0),
+        )
     metadata = GenerationMetadata(
         estimated_dimensions_mm=estimate_dimensions_mm(geometry.primary_solid),
         printability_score=validation.printability_score,

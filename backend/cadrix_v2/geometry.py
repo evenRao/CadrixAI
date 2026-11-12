@@ -1,65 +1,26 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
 from typing import Any, Dict
 
 import cadquery as cq
 
-
-@dataclass
-class GeneratedPart:
-    label: str
-    file_suffix: str
-    solid: cq.Workplane
-
-
-@dataclass
-class GeneratedGeometry:
-    primary_solid: cq.Workplane
-    preview_solid: cq.Workplane
-    extra_parts: list[GeneratedPart] = field(default_factory=list)
-
-
-def normalize_to_build_plate(solid: cq.Workplane) -> cq.Workplane:
-    bbox = solid.val().BoundingBox()
-    center_x = (bbox.xmin + bbox.xmax) / 2.0
-    center_y = (bbox.ymin + bbox.ymax) / 2.0
-    return solid.translate((-center_x, -center_y, -bbox.zmin))
-
-
-def estimate_dimensions_mm(solid: cq.Workplane) -> Dict[str, float]:
-    bbox = solid.val().BoundingBox()
-    return {
-        "x": round(float(bbox.xlen), 2),
-        "y": round(float(bbox.ylen), 2),
-        "z": round(float(bbox.zlen), 2),
-    }
+from cadrix_v2.geometry_core import EPS, GeneratedGeometry, GeneratedPart, divided_tray, estimate_dimensions_mm, normalize_to_build_plate, open_shell, soften_edges
+from cadrix_v2.library_geometry import LIBRARY_GENERATORS
 
 
 def _safe_fillet(solid: cq.Workplane, radius: float) -> cq.Workplane:
     if radius <= 0:
         return solid
     try:
-        return solid.edges("|Z").fillet(radius)
+        candidate = solid.edges("|Z").fillet(radius)
+        return candidate if candidate.val().isValid() and candidate.solids().size() == solid.solids().size() else solid
     except Exception:
         return solid
 
 
 def _open_shell(length_mm: float, width_mm: float, height_mm: float, wall_mm: float, floor_mm: float, corner_radius_mm: float = 0.0) -> cq.Workplane:
-    outer = cq.Workplane("XY").box(length_mm, width_mm, height_mm, centered=(True, True, False))
-    inner_length = max(length_mm - (2.0 * wall_mm), 2.0)
-    inner_width = max(width_mm - (2.0 * wall_mm), 2.0)
-    inner_height = max(height_mm - floor_mm, 1.0)
-    inner = (
-        cq.Workplane("XY")
-        .box(inner_length, inner_width, inner_height, centered=(True, True, False))
-        .translate((0, 0, floor_mm))
-    )
-    shell = outer.cut(inner)
-    if corner_radius_mm > 0:
-        shell = _safe_fillet(shell, min(corner_radius_mm, min(length_mm, width_mm) * 0.12))
-    return shell
+    return open_shell(length_mm, width_mm, height_mm, wall_mm, floor_mm, corner_radius_mm)
 
 
 def generate_phone_stand(parameters: Dict[str, Any]) -> GeneratedGeometry:
@@ -77,53 +38,55 @@ def generate_phone_stand(parameters: Dict[str, Any]) -> GeneratedGeometry:
     edge_radius = float(parameters.get("edge_radius_mm", 2))
 
     overall_width = phone_width + (2 * side_margin)
-    front_lip_depth = max(device_thickness + 4, 14)
-    support_run = back_height / max(math.tan(angle), 0.35)
-    base_depth = max(support_run + front_lip_depth + 12, overall_width * 0.55, 75)
-    support_front_x = min(max(front_lip_depth + 8, base_depth - support_run), base_depth - wall)
+    lip_depth = max(wall + 2, 5)
+    seat_depth = device_thickness + 2 * float(parameters.get("tolerance_mm", 0.4)) + 4
+    support_start = lip_depth + seat_depth
+    support_run = back_height / math.tan(angle)
+    base_depth = support_start + support_run + wall
 
-    # The side profile is a stable wedge instead of a thin plate. That keeps the
-    # stand printable without support for typical 60-70 degree usage angles.
+    # X is the device width; the YZ profile keeps the requested support angle.
+    # Both-sided extrusion takes a HALF-width, not the overall width.
     profile = (
-        cq.Workplane("XZ")
+        cq.Workplane("YZ")
         .polyline(
             [
                 (0, 0),
                 (base_depth, 0),
                 (base_depth, base_thickness + back_height),
-                (max(base_depth - wall, support_front_x + wall), base_thickness + back_height),
-                (support_front_x, base_thickness),
-                (front_lip_depth, base_thickness),
-                (front_lip_depth, base_thickness + front_lip),
+                (base_depth - wall, base_thickness + back_height),
+                (support_start, base_thickness),
+                (lip_depth, base_thickness),
+                (lip_depth, base_thickness + front_lip),
                 (0, base_thickness + front_lip),
             ]
         )
         .close()
-        .extrude(overall_width, both=True)
+        .extrude(overall_width / 2, both=True)
     )
-
-    seat_cut = (
-        cq.Workplane("XY")
-        .box(overall_width * 0.9, device_thickness + 6, front_lip + base_thickness + 8, centered=(True, True, False))
-        .translate((0, 0, base_thickness))
-    )
-    body = profile.cut(seat_cut)
+    body = profile
+    if parameters.get("lightweight", True) and support_run > 4 * wall:
+        window = cq.Workplane("YZ").polyline([
+            (support_start + 2 * wall, base_thickness + wall),
+            (base_depth - wall, base_thickness + wall),
+            (base_depth - wall, base_thickness + back_height - 3 * wall),
+        ]).close().extrude(overall_width / 2 + EPS, both=True)
+        body = body.cut(window)
 
     if cable_slot:
         slot = (
             cq.Workplane("XY")
-            .box(cable_slot_width, max(device_thickness + 6, 12), base_thickness + 2, centered=(True, True, False))
-            .translate((0, -overall_width * 0.15, 0))
+            .box(cable_slot_width, support_start + 2 * EPS, base_thickness + front_lip + 2 * EPS, centered=(True, False, False))
+            .translate((0, -EPS, -EPS))
         )
         body = body.cut(slot)
 
     if rounded_edges:
         try:
-            body = body.edges("|Y").fillet(min(edge_radius, 2.5))
+            body = body.edges("|X").fillet(min(edge_radius, wall * 0.3, base_thickness * 0.2))
         except Exception:
             pass
 
-    body = normalize_to_build_plate(body)
+    body = normalize_to_build_plate(soften_edges(body, min(0.35, wall * 0.1)) if rounded_edges else body)
     return GeneratedGeometry(primary_solid=body, preview_solid=body)
 
 
@@ -363,30 +326,36 @@ def generate_cable_clip(parameters: Dict[str, Any]) -> GeneratedGeometry:
     base_thickness = float(parameters.get("base_thickness_mm", 3))
     screw_hole_d = float(parameters.get("screw_hole_diameter_mm", 4.2))
 
-    outer_r = (cable_d / 2.0) + wall
     inner_r = (cable_d / 2.0) + float(parameters.get("tolerance_mm", 0.35))
-
-    clip = cq.Workplane("XZ").circle(outer_r).extrude(clip_width, both=True)
-    inner = cq.Workplane("XZ").circle(inner_r).extrude(clip_width + 1, both=True)
+    outer_r = inner_r + wall
+    clip = cq.Workplane("XZ").circle(outer_r).extrude(clip_width / 2, both=True)
+    inner = cq.Workplane("XZ").circle(inner_r).extrude(clip_width / 2 + EPS, both=True)
     clip = clip.cut(inner)
 
     opening = (
         cq.Workplane("XY")
-        .box(outer_r * 1.5, clip_width + 2, outer_r * 2.2, centered=(True, True, True))
-        .translate((outer_r + (gap / 2.0), 0, outer_r * 0.25))
+        .box(gap, clip_width + 2 * EPS, outer_r + EPS, centered=(True, True, False))
     )
     clip = clip.cut(opening)
 
     if mounting_base:
         base = (
             cq.Workplane("XY")
-            .box(max(base_length, outer_r * 2.0), clip_width, base_thickness, centered=(True, True, False))
-            .translate((0, 0, 0))
+            .box(max(base_length, outer_r * 2.0 + wall), clip_width, base_thickness, centered=(True, True, False))
         )
-        clip = clip.translate((0, 0, base_thickness + outer_r))
+        # A real overlap fuses the circular clip to its base rather than merely
+        # touching it at a tangent (which exports disconnected shells).
+        clip = clip.translate((0, 0, base_thickness + outer_r - min(wall * 0.4, base_thickness * 0.4)))
         clip = base.union(clip)
         if screw_hole:
-            clip = clip.faces("<Z").workplane(origin=(0, 0, base_thickness)).hole(screw_hole_d)
+            x_hole = base_length / 2 - screw_hole_d / 2 - wall * 0.6
+            for side in (-1, 1):
+                bore = cq.Workplane("XY").circle(screw_hole_d / 2).extrude(base_thickness + 2 * EPS).translate((side * x_hole, 0, -EPS))
+                clip = clip.cut(bore)
+    else:
+        # Trim a small flat onto the underside for build-plate contact.
+        bottom = cq.Workplane("XY").box(outer_r * 3, clip_width + 2, outer_r, centered=(True, True, False)).translate((0, 0, -2 * outer_r + min(0.4, wall * 0.15)))
+        clip = clip.cut(bottom)
 
     clip = normalize_to_build_plate(clip)
     return GeneratedGeometry(primary_solid=clip, preview_solid=clip)
@@ -551,23 +520,25 @@ def generate_wall_hook(parameters: Dict[str, Any]) -> GeneratedGeometry:
     hole_diameter = float(parameters.get("screw_hole_diameter_mm", 5))
     hole_spacing = float(parameters.get("screw_hole_spacing_mm", 40))
 
-    plate = cq.Workplane("XY").box(plate_width, plate_height, plate_thickness, centered=(True, True, False))
-    if hole_diameter > 0 and hole_spacing > 0:
-        plate = plate.faces(">Z").workplane().pushPoints([(0, -hole_spacing / 2.0), (0, hole_spacing / 2.0)]).hole(hole_diameter)
-
-    path = (
-        cq.Workplane("XZ")
-        .polyline(
-            [
-                (plate_width / 2.0, plate_thickness * 0.55),
-                (plate_width / 2.0 + hook_depth * 0.75, plate_thickness * 0.55),
-                (plate_width / 2.0 + hook_depth, max((plate_thickness * 0.55) - hook_drop, hook_diameter * 0.55)),
-            ]
-        )
-        .wire()
-    )
-    arm = cq.Workplane("YZ").circle(hook_diameter / 2.0).sweep(path)
-    hook = normalize_to_build_plate(plate.union(arm))
+    plate = cq.Workplane("XY").box(plate_width, plate_thickness, plate_height, centered=(True, False, False)).translate((0, -plate_thickness, 0))
+    plate = plate.edges("|Y").fillet(min(4, plate_width * 0.1))
+    root = plate_height * 0.55
+    t = hook_diameter
+    arm = cq.Workplane("YZ").polyline([
+        (-EPS, root - t / 2), (hook_depth, root - t / 2),
+        (hook_depth, root + hook_drop), (hook_depth - t, root + hook_drop),
+        (hook_depth - t, root + t / 2), (-EPS, root + t / 2),
+    ]).close().extrude(t / 2, both=True)
+    try:
+        arm = arm.edges("|X").fillet(min(t * 0.2, 1.5))
+    except (ValueError, RuntimeError):
+        pass
+    brace = cq.Workplane("YZ").polyline([(-EPS, root - t / 2 + EPS), (hook_depth * 0.6, root - t / 2 + EPS), (-EPS, max(2, root - t / 2 - hook_depth * 0.4))]).close().extrude(t / 2, both=True)
+    hook = plate.union(arm).union(brace)
+    for z in ((plate_height - hole_spacing) / 2, (plate_height + hole_spacing) / 2):
+        bore = cq.Workplane("XZ").circle(hole_diameter / 2).extrude(plate_thickness + 2 * EPS).translate((0, EPS, z))
+        hook = hook.cut(bore)
+    hook = normalize_to_build_plate(hook)
     return GeneratedGeometry(primary_solid=hook, preview_solid=hook)
 
 
@@ -610,7 +581,7 @@ def generate_bottle_holder(parameters: Dict[str, Any]) -> GeneratedGeometry:
     opening_cut = (
         cq.Workplane("XY")
         .box(max(opening, 6), (outer_radius * 2.0) + 4.0, holder_height + 1.0, centered=(True, True, False))
-        .translate((0, outer_radius + 1.0, 0))
+        .translate((0, outer_radius + 1.0, floor))
     )
     holder = holder.cut(opening_cut)
 
@@ -618,15 +589,15 @@ def generate_bottle_holder(parameters: Dict[str, Any]) -> GeneratedGeometry:
         plate = (
             cq.Workplane("XY")
             .box(plate_width, wall, plate_height, centered=(True, True, False))
-            .translate((0, -outer_radius - (wall / 2.0), 0))
+            .translate((0, -outer_radius + wall * 0.35, 0))
         )
         if screw_hole_diameter > 0:
             for z_pos in (plate_height * 0.28, plate_height * 0.72):
                 plate = plate.cut(
                     cq.Workplane("XZ")
                     .circle(screw_hole_diameter / 2.0)
-                    .extrude(wall + 2.0)
-                    .translate((0, -outer_radius - wall - 1.0, z_pos))
+                    .extrude(wall * 2 + 2)
+                    .translate((0, -outer_radius + wall + 1, z_pos))
                 )
         holder = holder.union(plate)
 
@@ -635,33 +606,7 @@ def generate_bottle_holder(parameters: Dict[str, Any]) -> GeneratedGeometry:
 
 
 def generate_desk_organizer(parameters: Dict[str, Any]) -> GeneratedGeometry:
-    length_mm = float(parameters.get("length_mm", 160))
-    width_mm = float(parameters.get("width_mm", 100))
-    height_mm = float(parameters.get("height_mm", 90))
-    wall = float(parameters.get("wall_thickness_mm", 3))
-    floor = float(parameters.get("floor_thickness_mm", 3))
-    compartment_count = int(parameters.get("compartment_count", 3))
-    divider_thickness = float(parameters.get("divider_thickness_mm", 3))
-
-    organizer = _open_shell(length_mm, width_mm, height_mm, wall, floor, 2.0)
-    inner_width = max(width_mm - (2.0 * wall), 6.0)
-    inner_height = max(height_mm - floor, 4.0)
-    inner_length = max(length_mm - (2.0 * wall), 6.0)
-
-    if compartment_count > 1:
-        step = inner_length / compartment_count
-        positions = [
-            (-inner_length / 2.0) + (step * index)
-            for index in range(1, compartment_count)
-        ]
-        for x_pos in positions:
-            divider = (
-                cq.Workplane("XY")
-                .box(divider_thickness, inner_width, inner_height, centered=(True, True, False))
-                .translate((x_pos, 0, floor))
-            )
-            organizer = organizer.union(divider)
-
+    organizer = divided_tray({**parameters, "corner_radius_mm": parameters.get("corner_radius_mm", 5)})
     organizer = normalize_to_build_plate(organizer)
     return GeneratedGeometry(primary_solid=organizer, preview_solid=organizer)
 
@@ -686,7 +631,7 @@ def generate_laptop_stand(parameters: Dict[str, Any]) -> GeneratedGeometry:
             ]
         )
         .close()
-        .extrude(width_mm, both=True)
+        .extrude(width_mm / 2, both=True)
     )
 
     cutout = (
@@ -739,7 +684,7 @@ def generate_remote_holder(parameters: Dict[str, Any]) -> GeneratedGeometry:
                 cq.Workplane("XZ")
                 .circle(screw_hole_diameter / 2.0)
                 .extrude(wall + 2.0)
-                .translate((x_pos, (-outer_depth / 2.0) - 1.0, z_pos))
+                .translate((x_pos, (-outer_depth / 2.0) + wall + 1.0, z_pos))
             )
 
     holder = normalize_to_build_plate(holder)
@@ -1019,25 +964,15 @@ def generate_stackable_box(parameters: Dict[str, Any]) -> GeneratedGeometry:
     rounded_edges = bool(parameters.get("rounded_edges", True))
     corner_radius_mm = float(parameters.get("corner_radius_mm", 2))
 
-    box = _open_shell(length_mm, width_mm, height_mm, wall_mm, floor_mm, corner_radius_mm if rounded_edges else 0.0)
+    radius = corner_radius_mm if rounded_edges else 0.0
+    box = _open_shell(length_mm, width_mm, height_mm - lip_height_mm, wall_mm, floor_mm, radius).translate((0, 0, lip_height_mm))
     inner_length = max(length_mm - (2.0 * wall_mm), 8.0)
     inner_width = max(width_mm - (2.0 * wall_mm), 8.0)
 
-    lip_outer = (
-        cq.Workplane("XY")
-        .box(inner_length - (2.0 * clearance_mm), inner_width - (2.0 * clearance_mm), lip_height_mm, centered=(True, True, False))
-        .translate((0, 0, height_mm - lip_height_mm))
-    )
-    lip_inner = (
-        cq.Workplane("XY")
-        .box(inner_length - (2.0 * (wall_mm + clearance_mm)), inner_width - (2.0 * (wall_mm + clearance_mm)), lip_height_mm, centered=(True, True, False))
-        .translate((0, 0, height_mm - lip_height_mm))
-    )
-    box = box.union(lip_outer.cut(lip_inner))
-
-    foot_outer = cq.Workplane("XY").box(inner_length - (2.0 * clearance_mm), inner_width - (2.0 * clearance_mm), lip_height_mm, centered=(True, True, False))
-    foot_inner = cq.Workplane("XY").box(inner_length - (2.0 * (wall_mm + clearance_mm)), inner_width - (2.0 * (wall_mm + clearance_mm)), lip_height_mm, centered=(True, True, False))
-    box = box.union(foot_outer.cut(foot_inner))
+    # The inset bottom foot enters the open rim of the next box. Unlike the old
+    # floating inner lip, it overlaps the floor and is part of the same solid.
+    foot = _open_shell(inner_length - 2 * clearance_mm, inner_width - 2 * clearance_mm, lip_height_mm + EPS, wall_mm, 0, max(radius - wall_mm - clearance_mm, 0))
+    box = box.union(foot)
 
     box = normalize_to_build_plate(box)
     return GeneratedGeometry(primary_solid=box, preview_solid=box)
@@ -1176,7 +1111,15 @@ def generate_geometry(model_type: str, parameters: Dict[str, Any]) -> GeneratedG
         "stackable_box": generate_stackable_box,
         "gridfinity_bin": generate_gridfinity_bin,
         "interlocking_panel": generate_interlocking_panel,
+        **LIBRARY_GENERATORS,
     }
     if model_type not in generators:
         raise ValueError(f"No V2 generator implemented for {model_type}.")
-    return generators[model_type](parameters)
+    geometry = generators[model_type](parameters)
+    if model_type != "hinge" and geometry.primary_solid.solids().size() != 1:
+        raise ValueError("This parameter combination produced disconnected pieces in a single-part model.")
+    # Never send an invalid B-rep to the mesh/STEP exporters.
+    for body in (geometry.primary_solid, geometry.preview_solid, *(part.solid for part in geometry.extra_parts)):
+        if not body.val().isValid() or not body.solids().size() or body.val().Volume() <= 0:
+            raise ValueError("This parameter combination did not produce valid solid geometry.")
+    return geometry
