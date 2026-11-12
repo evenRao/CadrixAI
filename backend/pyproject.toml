@@ -10,7 +10,7 @@ dependencies = [
     "requests==2.34.2",
     "numpy==2.5.4",
     "trimesh==4.6.1",
-    "pygltflib==1.16.2",
+    "pygltflib==1.16.5",
     "cadquery==2.8.0",
 ]
 
