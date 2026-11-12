@@ -9,7 +9,7 @@ dependencies = [
     "pydantic==2.14.3",
     "requests==2.34.2",
     "numpy==2.5.4",
-    "trimesh==4.6.1",
+    "trimesh==5.2.0",
     "pygltflib==1.16.2",
     "cadquery==2.8.0",
 ]
