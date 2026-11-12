@@ -1,0 +1,13 @@
+{
+  "name": "cadrixai",
+  "private": true,
+  "version": "2.1.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "start": "node scripts/dev.mjs",
+    "test": "node --test scripts/tests/*.test.mjs"
+  }
+}

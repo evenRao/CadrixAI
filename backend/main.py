@@ -16,6 +16,7 @@ import json
 import os
 import re
 import uuid
+from pathlib import Path
 from typing import Literal, Optional, List, Dict, Any, Tuple
 
 import numpy as np
@@ -24,24 +25,38 @@ import requests
 import cadquery as cq
 from cadquery import exporters
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
+from cadrix_v2.app import router as cadrix_v2_router
+from cadrix_v2.registry import MODEL_REGISTRY
+from cadrix_v2.runtime import output_directory
 
 BASE_DIR = os.path.dirname(__file__)
-OUT_DIR = os.path.join(BASE_DIR, "out")
-os.makedirs(OUT_DIR, exist_ok=True)
+OUT_DIR = str(output_directory())
+FRONTEND_DIR = os.getenv("CADRIX_FRONTEND_DIR")
+if FRONTEND_DIR:
+    FRONTEND_DIR = Path(FRONTEND_DIR).resolve()
+    if not (FRONTEND_DIR / "index.html").is_file():
+        raise RuntimeError("CADRIX_FRONTEND_DIR must contain a built frontend/index.html.")
 
 app = FastAPI(title="CadrixAI (Intent-Driven Parametric CAD)")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=os.getenv("CADRIX_CORS_ORIGINS", "").split(",") if os.getenv("CADRIX_CORS_ORIGINS") else [
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(cadrix_v2_router)
 
 # ----------------------------
 # Supported model types
@@ -113,6 +128,7 @@ class GenerateResponse(BaseModel):
     stl_download_url: str
     preview_glb_url: str
     params_used: Dict[str, Any]
+    extra_downloads: List[Dict[str, str]] = Field(default_factory=list)
 
 
 class CapabilityItem(BaseModel):
@@ -731,7 +747,7 @@ def cq_open_box(p: Dict[str, Any]) -> cq.Workplane:
     inner = cq.Workplane("XY").rect(inner_L, inner_W).extrude(inner_H).translate((0, 0, floor))
     return outer.cut(inner)
 
-def cq_box_with_lid(p: Dict[str, Any]) -> cq.Workplane:
+def cq_box_with_lid_parts(p: Dict[str, Any], preview_layout: bool = False) -> Tuple[cq.Workplane, cq.Workplane]:
     L, W, H = float(p["length_mm"]), float(p["width_mm"]), float(p["height_mm"])
     wall, floor = float(p["wall_mm"]), float(p["floor_mm"])
     r = float(p.get("corner_radius_mm", 0.0))
@@ -760,6 +776,13 @@ def cq_box_with_lid(p: Dict[str, Any]) -> cq.Workplane:
     else:
         lid = lid_outer.cut(cavity)
 
+    if not preview_layout:
+        lid = lid.translate((0, 0, -(H + 2)))
+
+    return base, lid
+
+def cq_box_with_lid(p: Dict[str, Any]) -> cq.Workplane:
+    base, lid = cq_box_with_lid_parts(p, preview_layout=True)
     return base.union(lid)
 
 def cq_tray(p: Dict[str, Any]) -> cq.Workplane:
@@ -1083,13 +1106,11 @@ GENERATORS: Dict[str, Any] = {
 # ----------------------------
 # Export helpers
 # ----------------------------
-def export_stl_and_glb(solid: cq.Workplane, file_id: str) -> None:
-    stl_path = os.path.join(OUT_DIR, f"{file_id}.stl")
-    glb_path = os.path.join(OUT_DIR, f"{file_id}.glb")
-
+def export_stl(solid: cq.Workplane, stl_path: str) -> None:
     AUTHOR = "Bhavyadeep Rao"
     APP = "CadrixAI"
     YEAR = "2026"
+    file_id = os.path.splitext(os.path.basename(stl_path))[0]
 
     # Export STL as ASCII so a header/signature is human-readable
     exporters.export(
@@ -1119,6 +1140,12 @@ def export_stl_and_glb(solid: cq.Workplane, file_id: str) -> None:
         # If anything goes wrong, don't fail model generation just for a signature
         pass
 
+def export_glb_from_stl(stl_path: str, glb_path: str) -> None:
+    AUTHOR = "Bhavyadeep Rao"
+    APP = "CadrixAI"
+    YEAR = "2026"
+    file_id = os.path.splitext(os.path.basename(stl_path))[0]
+
     # Convert STL -> GLB
     mesh = trimesh.load(stl_path, force="mesh")
     if not isinstance(mesh, trimesh.Trimesh):
@@ -1135,9 +1162,34 @@ def export_stl_and_glb(solid: cq.Workplane, file_id: str) -> None:
 
     scene.export(glb_path)
 
+def export_step(solid: cq.Workplane, step_path: str) -> None:
+    exporters.export(
+        solid,
+        step_path,
+        exportType="STEP",
+    )
+
+def export_stl_and_glb(solid: cq.Workplane, file_id: str) -> None:
+    stl_path = os.path.join(OUT_DIR, f"{file_id}.stl")
+    glb_path = os.path.join(OUT_DIR, f"{file_id}.glb")
+
+    export_stl(solid, stl_path)
+    export_glb_from_stl(stl_path, glb_path)
+
 # ----------------------------
 # Routes
 # ----------------------------
+@app.get("/")
+def root():
+    if FRONTEND_DIR:
+        return FileResponse(FRONTEND_DIR / "index.html", media_type="text/html")
+    return RedirectResponse(url="/docs")
+
+
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    return {"status": "ok", "models": len(MODEL_REGISTRY)}
+
 @app.get("/capabilities", response_model=CapabilitiesResponse)
 def capabilities():
     return CapabilitiesResponse(
@@ -1168,34 +1220,77 @@ def about():
     }
 
 @app.post("/generate", response_model=GenerateResponse)
-def generate(req: GenerateRequest):
+def generate(req: GenerateRequest, request: Request):
     # Trust the plan. Never re-guess.
     if req.model_type not in GENERATORS:
         raise HTTPException(400, "Unsupported model_type")
 
     file_id = f"mdl_{uuid.uuid4().hex[:12]}"
 
-    gen = GENERATORS[req.model_type]
+    extra_downloads: List[Dict[str, str]] = []
+
     try:
-        solid = gen(req.params)
+        if req.model_type == "box_with_lid":
+            base, lid = cq_box_with_lid_parts(req.params, preview_layout=False)
+            preview_solid = cq_box_with_lid(req.params)
+
+            export_stl(base, os.path.join(OUT_DIR, f"{file_id}.stl"))
+            export_step(base, os.path.join(OUT_DIR, f"{file_id}.step"))
+            export_stl(lid, os.path.join(OUT_DIR, f"{file_id}_lid.stl"))
+            export_step(lid, os.path.join(OUT_DIR, f"{file_id}_lid.step"))
+            export_glb_from_stl(
+                os.path.join(OUT_DIR, f"{file_id}.stl"),
+                os.path.join(OUT_DIR, f"{file_id}.glb"),
+            )
+            extra_downloads.append(
+                {
+                    "label": "Fusion STEP",
+                    "url": str(request.url_for("get_file", filename=f"{file_id}.step")),
+                }
+            )
+            extra_downloads.append(
+                {
+                    "label": "Lid STL",
+                    "url": str(request.url_for("get_file", filename=f"{file_id}_lid.stl")),
+                }
+            )
+            extra_downloads.append(
+                {
+                    "label": "Lid STEP",
+                    "url": str(request.url_for("get_file", filename=f"{file_id}_lid.step")),
+                }
+            )
+            export_stl_and_glb(preview_solid, f"{file_id}_preview")
+            preview_glb_url = str(request.url_for("get_file", filename=f"{file_id}_preview.glb"))
+        else:
+            gen = GENERATORS[req.model_type]
+            solid = gen(req.params)
+            export_stl_and_glb(solid, file_id)
+            export_step(solid, os.path.join(OUT_DIR, f"{file_id}.step"))
+            extra_downloads.append(
+                {
+                    "label": "Fusion STEP",
+                    "url": str(request.url_for("get_file", filename=f"{file_id}.step")),
+                }
+            )
+            preview_glb_url = str(request.url_for("get_file", filename=f"{file_id}.glb"))
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(500, f"Generator failed: {e}")
 
-    export_stl_and_glb(solid, file_id)
-
     return GenerateResponse(
         model_type=req.model_type,
         file_id=file_id,
-        stl_download_url=f"http://localhost:8000/files/{file_id}.stl",
-        preview_glb_url=f"http://localhost:8000/files/{file_id}.glb",
+        stl_download_url=str(request.url_for("get_file", filename=f"{file_id}.stl")),
+        preview_glb_url=preview_glb_url,
         params_used=req.params,
+        extra_downloads=extra_downloads,
     )
 
 @app.get("/files/{filename}")
 def get_file(filename: str):
-    safe = re.fullmatch(r"[A-Za-z0-9_]+\.(stl|glb)", filename)
+    safe = re.fullmatch(r"[A-Za-z0-9_]+\.(stl|glb|step)", filename)
     if not safe:
         raise HTTPException(status_code=400, detail="Invalid filename")
 
@@ -1203,6 +1298,15 @@ def get_file(filename: str):
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="File not found")
 
-    media_type = "model/stl" if filename.endswith(".stl") else "model/gltf-binary"
+    if filename.endswith(".stl"):
+        media_type = "model/stl"
+    elif filename.endswith(".glb"):
+        media_type = "model/gltf-binary"
+    else:
+        media_type = "application/step"
     return FileResponse(path, media_type=media_type, filename=filename)
 
+
+# API and download routes take precedence over static frontend files.
+if FRONTEND_DIR:
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")

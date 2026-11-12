@@ -8,7 +8,8 @@ Designed and developed by Bhavyadeep Rao.
 All core architecture, planning logic, and CAD generation implemented independently.
 */
 
-const API = "http://localhost:8000";
+// Use the page's origin in production; Vite proxies these routes in development.
+const API = (import.meta.env?.VITE_API_BASE_URL?.trim() || "/v2").replace(/\/+$/, "");
 
 async function handle(res) {
   if (!res.ok) {
@@ -23,20 +24,20 @@ export async function getCapabilities() {
   return handle(res);
 }
 
-export async function planModel({ prompt, useOllama }) {
+export async function planModel({ prompt, useLlm = false, modelType = null }) {
   const res = await fetch(`${API}/plan`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, units: "mm", use_ollama: !!useOllama })
+    body: JSON.stringify({ prompt, units: "mm", use_llm: !!useLlm, model_type: modelType })
   });
   return handle(res);
 }
 
-export async function generateModel({ prompt, modelType, params }) {
+export async function generateModel({ prompt, modelType = null, parameters = {}, useLlm = false }) {
   const res = await fetch(`${API}/generate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, model_type: modelType, params })
+    body: JSON.stringify({ prompt, model_type: modelType, parameters, use_llm: !!useLlm })
   });
   return handle(res);
 }
