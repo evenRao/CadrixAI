@@ -10,18 +10,18 @@ from fastapi import Request
 
 from cadrix_v2.geometry import GeneratedGeometry
 from cadrix_v2.schemas import DownloadLink, FileBundle
+from cadrix_v2.runtime import output_directory
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-OUT_DIR = BASE_DIR / "out"
-OUT_DIR.mkdir(exist_ok=True)
+OUT_DIR = output_directory()
 
 APP_NAME = "CadrixAI"
 
 
 def export_stl(solid: cq.Workplane, stl_path: Path) -> None:
     file_id = stl_path.stem
-    exporters.export(solid, str(stl_path), exportType="STL", opt={"ascii": True})
+    exporters.export(solid, str(stl_path), exportType="STL", tolerance=0.04, angularTolerance=0.08, opt={"ascii": True})
     try:
         lines = stl_path.read_text(encoding="utf-8", errors="ignore").splitlines(keepends=True)
         if lines and lines[0].lower().startswith("solid"):

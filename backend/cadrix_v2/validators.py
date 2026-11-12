@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
 from cadrix_v2.registry import ModelSpec
 from cadrix_v2.schemas import ValidationIssue
+from cadrix_v2.library_validation import validate_library_parameters
 
 
 @dataclass
@@ -36,19 +38,6 @@ def _issue(
     return ValidationIssue(severity=severity, message=message, field=field, suggestion=suggestion)
 
 
-def _positive_number(issues: list[ValidationIssue], parameters: Dict[str, Any], key: str, label: str) -> None:
-    value = parameters.get(key)
-    if value is None:
-        return
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        issues.append(_issue("error", f"{label} must be numeric.", field=key))
-        return
-    if numeric <= 0:
-        issues.append(_issue("error", f"{label} must be greater than 0.", field=key))
-
-
 def validate_parameters(spec: ModelSpec, parameters: Dict[str, Any]) -> ValidationResult:
     normalized = {**parameters}
     issues: list[ValidationIssue] = []
@@ -64,10 +53,26 @@ def validate_parameters(spec: ModelSpec, parameters: Dict[str, Any]) -> Validati
             )
         value = normalized.get(definition.key)
         if value is None:
+            if not definition.required:
+                normalized[definition.key] = definition.default
             continue
         if definition.type in {"number", "integer"}:
-            _positive_number(issues, normalized, definition.key, definition.label)
-            numeric = float(value)
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                issues.append(_issue("error", f"{definition.label} must be numeric.", field=definition.key))
+                continue
+            if isinstance(value, bool) or not math.isfinite(numeric):
+                if not math.isfinite(numeric):
+                    normalized[definition.key] = str(value)
+                issues.append(_issue("error", f"{definition.label} must be a finite number.", field=definition.key))
+                continue
+            if definition.type == "integer" and not numeric.is_integer():
+                issues.append(_issue("error", f"{definition.label} must be a whole number.", field=definition.key))
+                continue
+            if numeric < 0 or (numeric == 0 and definition.minimum != 0):
+                issues.append(_issue("error", f"{definition.label} must be greater than 0.", field=definition.key))
+            normalized[definition.key] = int(numeric) if definition.type == "integer" else numeric
             if definition.minimum is not None and numeric < definition.minimum:
                 issues.append(
                     _issue(
@@ -86,6 +91,14 @@ def validate_parameters(spec: ModelSpec, parameters: Dict[str, Any]) -> Validati
                         suggestion=f"Reduce {definition.label.lower()} to {definition.maximum}{definition.unit or ''} or less.",
                     )
                 )
+
+        elif definition.type == "boolean" and not isinstance(value, bool):
+            issues.append(_issue("error", f"{definition.label} must be true or false.", field=definition.key))
+
+    # Relationship validators assume well-typed, in-range numbers.
+    if any(issue.severity == "error" for issue in issues):
+        return ValidationResult(parameters=normalized, issues=issues)
+    validate_library_parameters(spec.model_type, normalized, issues)
 
     if spec.model_type == "phone_stand":
         _validate_phone_stand(normalized, issues)
@@ -244,6 +257,13 @@ def _validate_wall_hook(parameters: Dict[str, Any], issues: list[ValidationIssue
     hook_drop = float(parameters.get("hook_drop_mm", 24))
     hole_diameter = float(parameters.get("screw_hole_diameter_mm", 5))
     hole_spacing = float(parameters.get("screw_hole_spacing_mm", 40))
+    thickness = float(parameters.get("hook_diameter_mm", 10))
+
+    if hook_depth <= thickness + 2:
+        issues.append(_issue("error", "Hook depth must exceed the arm thickness by at least 2mm.", field="hook_depth_mm"))
+    if hook_drop <= thickness / 2:
+        issues.append(_issue("error", "Tip rise must exceed half the arm thickness.", field="hook_drop_mm"))
+    issues.append(_issue("warning", "Print the wall hook on its side to avoid supports beneath the arm; load capacity has not been tested."))
 
     if hook_depth <= 12:
         issues.append(_issue("warning", "Very short hook reach limits usable hanging depth.", field="hook_depth_mm", suggestion="Increase hook depth to 20mm or more."))
@@ -325,6 +345,16 @@ def _validate_spacer(parameters: Dict[str, Any], issues: list[ValidationIssue]) 
 
 
 def _validate_cable_clip(parameters: Dict[str, Any], issues: list[ValidationIssue]) -> None:
+    wall = float(parameters.get("wall_thickness_mm", 3))
+    inner_r = float(parameters.get("cable_diameter_mm", 6)) / 2 + float(parameters.get("tolerance_mm", 0.35))
+    if float(parameters.get("opening_gap_mm", 1.5)) >= 2 * inner_r:
+        issues.append(_issue("error", "The opening gap must be smaller than the cable pocket to retain the cable.", field="opening_gap_mm"))
+    if parameters.get("mounting_base") and parameters.get("screw_hole"):
+        hole = float(parameters.get("screw_hole_diameter_mm", 4.2))
+        if float(parameters.get("base_length_mm", 32)) < 2 * (inner_r + wall + hole + wall * 0.6):
+            issues.append(_issue("error", "The mounting base is too short for the clip and screw-hole edge clearance.", field="base_length_mm"))
+        if float(parameters.get("clip_width_mm", 12)) <= hole + 2.4:
+            issues.append(_issue("error", "Clip width must leave at least 1.2mm around the mounting holes.", field="clip_width_mm"))
     cable_d = float(parameters.get("cable_diameter_mm", 6))
     wall = float(parameters.get("wall_thickness_mm", 3))
     gap = float(parameters.get("opening_gap_mm", 1.5))

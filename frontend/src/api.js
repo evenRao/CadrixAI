@@ -8,7 +8,8 @@ Designed and developed by Bhavyadeep Rao.
 All core architecture, planning logic, and CAD generation implemented independently.
 */
 
-const API = "http://localhost:8000/v2";
+// Use the page's origin in production; Vite proxies these routes in development.
+const API = (import.meta.env?.VITE_API_BASE_URL?.trim() || "/v2").replace(/\/+$/, "");
 
 async function handle(res) {
   if (!res.ok) {

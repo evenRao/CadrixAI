@@ -1,0 +1,15 @@
+**/.git
+**/.venv*
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+**/.env
+**/.env.*
+**/.DS_Store
+backend/out
+.ci-tools
+.reports
+.release
+.github
+docs

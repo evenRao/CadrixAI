@@ -16,6 +16,7 @@ import json
 import os
 import re
 import uuid
+from pathlib import Path
 from typing import Literal, Optional, List, Dict, Any, Tuple
 
 import numpy as np
@@ -27,18 +28,25 @@ from cadquery import exporters
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from cadrix_v2.app import router as cadrix_v2_router
+from cadrix_v2.registry import MODEL_REGISTRY
+from cadrix_v2.runtime import output_directory
 
 BASE_DIR = os.path.dirname(__file__)
-OUT_DIR = os.path.join(BASE_DIR, "out")
-os.makedirs(OUT_DIR, exist_ok=True)
+OUT_DIR = str(output_directory())
+FRONTEND_DIR = os.getenv("CADRIX_FRONTEND_DIR")
+if FRONTEND_DIR:
+    FRONTEND_DIR = Path(FRONTEND_DIR).resolve()
+    if not (FRONTEND_DIR / "index.html").is_file():
+        raise RuntimeError("CADRIX_FRONTEND_DIR must contain a built frontend/index.html.")
 
 app = FastAPI(title="CadrixAI (Intent-Driven Parametric CAD)")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
+    allow_origins=os.getenv("CADRIX_CORS_ORIGINS", "").split(",") if os.getenv("CADRIX_CORS_ORIGINS") else [
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:5174",
@@ -1173,7 +1181,14 @@ def export_stl_and_glb(solid: cq.Workplane, file_id: str) -> None:
 # ----------------------------
 @app.get("/")
 def root():
+    if FRONTEND_DIR:
+        return FileResponse(FRONTEND_DIR / "index.html", media_type="text/html")
     return RedirectResponse(url="/docs")
+
+
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    return {"status": "ok", "models": len(MODEL_REGISTRY)}
 
 @app.get("/capabilities", response_model=CapabilitiesResponse)
 def capabilities():
@@ -1290,3 +1305,8 @@ def get_file(filename: str):
     else:
         media_type = "application/step"
     return FileResponse(path, media_type=media_type, filename=filename)
+
+
+# API and download routes take precedence over static frontend files.
+if FRONTEND_DIR:
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="frontend")
