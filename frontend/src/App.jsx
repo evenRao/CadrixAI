@@ -7,7 +7,7 @@ import useModelViewport from "./useModelViewport.js";
 import "./styles.css";
 
 const STARTERS = [
-  { title: "Phone stand", model_type: "phone_stand", example: "Make a phone stand for a 75mm wide phone with a 20 degree angle and cable hole." },
+  { title: "Phone stand", model_type: "phone_stand", example: "Make a phone stand for a 75mm wide phone with a 50 degree angle and cable hole." },
   { title: "Box with lid", model_type: "box_with_lid", example: "Box with lid 120x80x60 mm with 0.4mm clearance." },
   { title: "Cable clip", model_type: "cable_clip", example: "Make a cable clip for a 6mm cable." },
 ];
