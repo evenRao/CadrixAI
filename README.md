@@ -383,3 +383,7 @@ Keep `node_modules`, `.venv*`, `dist`, `__pycache__`, `backend/out`, local repor
 - The service has no authentication or per-user model isolation. Public hosting needs an appropriate HTTPS/authentication gateway, request limits, and resource limits.
 
 Future work includes richer assemblies, improved gear/thread profiles, slicing integration, print-time estimation, material guidance, and simulation-based strength checks.
+
+## License
+
+CadrixAI is licensed under the [MIT License](LICENSE).
