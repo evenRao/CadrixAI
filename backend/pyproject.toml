@@ -5,12 +5,12 @@ description = "Intent-driven parametric CAD backend for CadrixAI"
 requires-python = ">=3.13,<3.15"
 dependencies = [
     "fastapi==0.162.5",
-    "uvicorn==0.32.1",
+    "uvicorn==0.54.0",
     "pydantic==2.14.3",
     "requests==2.34.2",
     "numpy==2.5.4",
-    "trimesh==4.6.1",
-    "pygltflib==1.16.2",
+    "trimesh==5.2.0",
+    "pygltflib==1.16.5",
     "cadquery==2.8.0",
 ]
 
