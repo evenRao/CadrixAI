@@ -139,7 +139,7 @@ MODEL_SPECS = [
         description="A print-ready desk stand with tunable width, support angle, front lip, and optional cable slot.",
         keywords=("phone stand", "phone holder", "phone dock", "stand for phone"),
         examples=(
-            "Make a phone stand for a 75mm wide phone with a 20 degree angle and cable hole.",
+            "Make a phone stand for a 75mm wide phone with a 50 degree angle and cable hole.",
             "Large phone stand with rounded edges and a charger slot.",
         ),
         required_parameters=(
