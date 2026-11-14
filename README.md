@@ -6,6 +6,10 @@ CadrixAI turns a description into an editable parametric part, an interactive 3D
 
 The workspace uses React and Three.js, the API uses FastAPI, and CadQuery builds the solid geometry. The built-in parser works without a paid API or a local language model. Optional Ollama integration interprets descriptions through the same model registry and validation pipeline.
 
+## Demo
+
+https://github.com/user-attachments/assets/39e051b8-d65f-4400-97b2-33e6df8a53fe
+
 ## What's new in v2.1.0
 
 Released November 11, 2026.
